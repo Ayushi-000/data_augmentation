@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "Data_augmentation"
+version = "0.1.0"
+description = "A Python package for image, text, and audio data augmentation."
+authors = ["Ayushi Johari <ayushijohari99@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{ include = "augmentation" }]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+Pillow = "^10.0.0"
+numpy = "^1.24.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.4.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
