@@ -1,0 +1,147 @@
+name: package-publish
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  details:
+    runs-on: ubuntu-latest
+    outputs:
+      package_name: ${{ steps.package_info.outputs.package_name }}
+      new_version: ${{ steps.package_info.outputs.new_version }}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Get Package Name and Version from pyproject.toml
+        id: package_info
+        run: |
+          PACKAGE_NAME=$(grep -Po '(?<=^name = ")[^"]+' pyproject.toml)
+          NEW_VERSION=$(grep -Po '(?<=^version = ")[^"]+' pyproject.toml)
+          echo "Package name: $PACKAGE_NAME"
+          echo "New version: $NEW_VERSION"
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+  check_pypi:
+    needs: details
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch information from PyPI
+        run: |
+          PACKAGE_NAME=${{ needs.details.outputs.package_name }}
+          response=$(curl -s https://pypi.org/pypi/$PACKAGE_NAME/json || echo "{}")
+          latest_previous_version=$(echo $response | grep -oP '"releases":\{"\K[^"]+' | sort -rV | head -n 1)
+          if [ -z "$latest_previous_version" ]; then
+            echo "Package not found on PyPI."
+            latest_previous_version="0.0.0"
+          fi
+          echo "Latest version on PyPI: $latest_previous_version"
+          echo "latest_previous_version=$latest_previous_version" >> $GITHUB_ENV
+
+      - name: Compare versions
+        run: |
+          NEW_VERSION=${{ needs.details.outputs.new_version }}
+          LATEST_VERSION=$latest_previous_version
+          if [ "$(printf '%s\n' "$LATEST_VERSION" "$NEW_VERSION" | sort -rV | head -n 1)" != "$NEW_VERSION" ] || [ "$NEW_VERSION" == "$LATEST_VERSION" ]; then
+            echo "The new version $NEW_VERSION is not greater than the latest version $LATEST_VERSION on PyPI."
+            exit 1
+          else
+            echo "The new version $NEW_VERSION is greater than the latest version $LATEST_VERSION on PyPI."
+          fi
+
+  test:
+    needs: details
+    runs-on: ubuntu-latest
+    env:
+      NLTK_DATA: /home/runner/.cache/nltk
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: poetry install
+
+      #- name: Cache NLTK data
+       # uses: actions/cache@v3
+        #with:
+         # path: ~/.cache/nltk
+          #key: ${{ runner.os }}-nltk
+
+      #- name: Download NLTK Data
+       # run: |
+        #  poetry run python -c "
+         # import nltk
+          #nltk.download('punkt', download_dir='/home/runner/.cache/nltk')
+          #nltk.download('wordnet', download_dir='/home/runner/.cache/nltk')
+          #nltk.download('averaged_perceptron_tagger', download_dir='/home/runner/.cache/nltk')
+          #nltk.download('omw-1.4', download_dir='/home/runner/.cache/nltk')
+          #"
+
+      - name: Run tests
+        run: poetry run pytest --disable-warnings
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+          #cache: poetry
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies and build
+        run: |
+          poetry install
+          poetry build
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: [build, details]
+    runs-on: ubuntu-latest
+    environment:
+      name: publish
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
